@@ -75,6 +75,22 @@ export interface CaseOrder {
   neutral_citation?: string | null;
 }
 
+// Structured party — populated from the parties table when available.
+// Falls back to raw petitioner/respondent strings on CaseInfo for display.
+export interface Party {
+  party_type: 'petitioner' | 'respondent' | 'intervenor' | string;
+  name: string;
+  advocate_entity_id?: string | null;
+}
+
+// Individual hearing entry on a case.
+export interface Hearing {
+  hearing_date: string;
+  purpose?: string | null;
+  next_date?: string | null;
+  judge?: string | null;
+}
+
 export interface CaseInfo {
   cnr: string;
   case_number: string;
@@ -89,6 +105,10 @@ export interface CaseInfo {
   next_hearing_date?: string | null;
   court: Court;
   orders: CaseOrder[];
+  // Structured parties and hearings — present when served from the persistence layer.
+  // May be empty if the case was fetched live before being written to the cases table.
+  parties?: Party[];
+  hearings?: Hearing[];
 }
 
 export interface CauseListEntry {
@@ -105,20 +125,52 @@ export interface CauseListEntry {
   listing_date: string;
 }
 
-// Returned by getCauseList() — entries are present for district courts,
-// pdf_url is present for HC/SCI courts.
+// Returned by getCauseList() — unified shape regardless of court tier.
+// format="entries" → district/SCI courts, structured rows in entries[].
+// format="pdf"     → high courts, pdf_url points to the downloadable PDF.
 export interface CauseListResponse {
+  court_id: string;
+  court_name: string;
+  listing_date: string;
+  format: 'pdf' | 'entries';
   entries: CauseListEntry[];
   pdf_url: string | null;
+  bench_code: string | null;
   bench_name: string | null;
   total_cases: number | null;
+}
+
+export interface CalcuttaOrder {
+  order_date: string;
+  order_type: string;
+  judge: string;
+  pdf_url: string | null;
+  neutral_citation: string | null;
+}
+
+export interface CalcuttaResult {
+  case: CaseInfo | null;
+  orders: CalcuttaOrder[];
+  total: number;
+}
+
+// Per-court stats for an advocate — sourced from entity_court_stats join table.
+export interface AdvocateCourt {
+  court_id: string;
+  court_name: string;
+  case_count: number;       // alias for total_cases, kept for display compat
+  total_cases: number;
+  pending_cases: number;
+  disposed_cases: number;
+  first_seen?: string | null;
+  last_seen?: string | null;
 }
 
 export interface Advocate {
   id: string;
   canonical_name: string;
   name_variants: string[];
-  courts: { court_id: string; court_name: string; case_count: number }[];
+  courts: AdvocateCourt[];
   total_cases: number;
   pending_cases: number;
   disposed_cases: number;
@@ -128,12 +180,25 @@ export interface Advocate {
   last_seen: string;
 }
 
+// Per-court stats for a judge — sourced from entity_court_stats join table.
+export interface JudgeCourt {
+  court_id: string;
+  court_name: string;
+  start_date: string;        // alias for tenure_start, kept for display compat
+  end_date?: string | null;  // alias for tenure_end
+  tenure_start?: string | null;
+  tenure_end?: string | null;
+  total_judgments?: number;
+  authored?: number;
+  presided?: number;
+}
+
 export interface Judge {
   id: string;
   canonical_name: string;
   name_variants: string[];
   designation: string;
-  courts: { court_id: string; court_name: string; start_date: string; end_date?: string }[];
+  courts: JudgeCourt[];
   total_judgments: number;
   authored: number;
   presided: number;
@@ -164,7 +229,7 @@ export interface ResolutionReviewItem {
   name_a: string;
   name_b: string;
   similarity_score: number;
-  details: {
+  details?: {
     court_a: string;
     court_b: string;
     cases_a: number;
@@ -284,6 +349,56 @@ function normaliseJudgment(raw: Record<string, unknown>): Judgment {
   };
 }
 
+// Backend entity_court_stats / AdvocateCourt — normalise to AdvocateCourt shape.
+function normaliseAdvocateCourt(raw: Record<string, unknown>): AdvocateCourt {
+  const total = (raw.total_cases ?? raw.case_count ?? 0) as number;
+  return {
+    court_id:      raw.court_id      as string,
+    court_name:    raw.court_name    as string,
+    case_count:    total,
+    total_cases:   total,
+    pending_cases:  (raw.pending_cases  ?? 0) as number,
+    disposed_cases: (raw.disposed_cases ?? 0) as number,
+    first_seen:    (raw.first_seen  ?? null) as string | null,
+    last_seen:     (raw.last_seen   ?? null) as string | null,
+  };
+}
+
+// Backend entity_court_stats / JudgeCourt — normalise to JudgeCourt shape.
+function normaliseJudgeCourt(raw: Record<string, unknown>): JudgeCourt {
+  const tenureStart = (raw.tenure_start ?? raw.start_date ?? '') as string;
+  const tenureEnd   = (raw.tenure_end   ?? raw.end_date   ?? null) as string | null;
+  return {
+    court_id:        raw.court_id    as string,
+    court_name:      raw.court_name  as string,
+    start_date:      tenureStart,
+    end_date:        tenureEnd ?? undefined,
+    tenure_start:    tenureStart,
+    tenure_end:      tenureEnd,
+    total_judgments: (raw.total_judgments ?? 0) as number,
+    authored:        (raw.authored ?? 0) as number,
+    presided:        (raw.presided ?? 0) as number,
+  };
+}
+
+function normaliseAdvocate(raw: Advocate): Advocate {
+  return {
+    ...raw,
+    courts:        Array.isArray(raw.courts)        ? (raw.courts as unknown as Record<string, unknown>[]).map(normaliseAdvocateCourt) : [],
+    name_variants: Array.isArray(raw.name_variants) ? raw.name_variants : [],
+    specializations: raw.specializations && typeof raw.specializations === 'object' ? raw.specializations : {},
+    states:          raw.states          && typeof raw.states          === 'object' ? raw.states          : {},
+  };
+}
+
+function normaliseJudge(raw: Judge): Judge {
+  return {
+    ...raw,
+    courts:        Array.isArray(raw.courts)        ? (raw.courts as unknown as Record<string, unknown>[]).map(normaliseJudgeCourt) : [],
+    name_variants: Array.isArray(raw.name_variants) ? raw.name_variants : [],
+  };
+}
+
 // Map the backend bulk-job shape to the UI's BulkJob interface
 // Backend: { job_id, status (lowercase), query: { court, year }, total_records, processed_records, ... }
 // UI:      { job_id, status (uppercase), court_id, year, records_total, records_processed, progress, ... }
@@ -333,6 +448,16 @@ const MOCK_CASES: CaseInfo[] = [
       { order_date: '2024-01-18', order_type: 'Interim Order',      judge: 'Justice Rajiv Shakdher', pdf_url: '#' },
       { order_date: '2024-03-22', order_type: 'Adjournment Order',  judge: 'Justice Rajiv Shakdher', pdf_url: '#' },
     ],
+    parties: [
+      { party_type: 'petitioner', name: 'M/S TechCorp Solutions Pvt Ltd' },
+      { party_type: 'respondent', name: 'Union of India' },
+      { party_type: 'respondent', name: 'Ministry of Electronics & IT' },
+    ],
+    hearings: [
+      { hearing_date: '2024-01-18', purpose: 'Admission',     judge: 'Justice Rajiv Shakdher', next_date: '2024-03-22' },
+      { hearing_date: '2024-03-22', purpose: 'Arguments',     judge: 'Justice Rajiv Shakdher', next_date: '2026-07-10' },
+      { hearing_date: '2026-07-10', purpose: 'Final Hearing', judge: null,                      next_date: null },
+    ],
   },
   {
     cnr: 'MHAU010045672023',
@@ -350,6 +475,15 @@ const MOCK_CASES: CaseInfo[] = [
     orders: [
       { order_date: '2023-06-12', order_type: 'Notice Issued',        judge: 'Justice Devendra Kumar Upadhyaya', pdf_url: '#' },
       { order_date: '2023-11-05', order_type: 'Final Disposal Order', judge: 'Justice Devendra Kumar Upadhyaya', pdf_url: '#' },
+    ],
+    parties: [
+      { party_type: 'petitioner', name: 'Rameshwar J. Patil' },
+      { party_type: 'respondent', name: 'State of Maharashtra' },
+    ],
+    hearings: [
+      { hearing_date: '2023-06-12', purpose: 'Notice',          judge: 'Justice Devendra Kumar Upadhyaya', next_date: '2023-08-20' },
+      { hearing_date: '2023-08-20', purpose: 'Arguments',       judge: 'Justice Devendra Kumar Upadhyaya', next_date: '2023-11-05' },
+      { hearing_date: '2023-11-05', purpose: 'Final Disposal',  judge: 'Justice Devendra Kumar Upadhyaya', next_date: null },
     ],
   },
 ];
@@ -397,8 +531,8 @@ const MOCK_ADVOCATES: Advocate[] = [
     canonical_name: 'Sandeep G. Mehta',
     name_variants: ['Sandeep Mehta', 'S. G. Mehta'],
     courts: [
-      { court_id: 'delhi-hc', court_name: 'Delhi High Court',       case_count: 142 },
-      { court_id: 'sci',      court_name: 'Supreme Court of India',  case_count: 24  },
+      { court_id: 'delhi-hc', court_name: 'Delhi High Court',      case_count: 142, total_cases: 142, pending_cases: 35, disposed_cases: 107, first_seen: '2016-04-12', last_seen: '2026-05-28' },
+      { court_id: 'sci',      court_name: 'Supreme Court of India', case_count: 24,  total_cases: 24,  pending_cases: 7,  disposed_cases: 17,  first_seen: '2019-02-08', last_seen: '2026-03-15' },
     ],
     total_cases: 166, pending_cases: 42, disposed_cases: 124,
     specializations: { 'Writ Petition (Civil)': 78, 'Criminal Appeal': 45, 'Civil Appeal': 43 },
@@ -410,8 +544,8 @@ const MOCK_ADVOCATES: Advocate[] = [
     canonical_name: 'Prakash B. Shinde',
     name_variants: ['P. B. Shinde', 'Prakash Shinde'],
     courts: [
-      { court_id: 'bombay-hc',      court_name: 'Bombay High Court', case_count: 215 },
-      { court_id: 'dc-mh-pune-001', court_name: 'Pune District Court', case_count: 310 },
+      { court_id: 'bombay-hc',      court_name: 'Bombay High Court',   case_count: 215, total_cases: 215, pending_cases: 80, disposed_cases: 135, first_seen: '2012-09-01', last_seen: '2026-06-01' },
+      { court_id: 'dc-mh-pune-001', court_name: 'Pune District Court', case_count: 310, total_cases: 310, pending_cases: 105, disposed_cases: 205, first_seen: '2013-03-15', last_seen: '2026-05-20' },
     ],
     total_cases: 525, pending_cases: 185, disposed_cases: 340,
     specializations: { 'Miscellaneous Application': 200, 'Bail Application': 180, 'Civil Suit': 145 },
@@ -427,8 +561,8 @@ const MOCK_JUDGES: Judge[] = [
     name_variants: ['D.Y. Chandrachud', 'Dhananjaya Y. Chandrachud', 'Justice Chandrachud'],
     designation: 'Chief Justice of India',
     courts: [
-      { court_id: 'sci',       court_name: 'Supreme Court of India', start_date: '2016-05-13' },
-      { court_id: 'bombay-hc', court_name: 'Bombay High Court',      start_date: '2000-03-29', end_date: '2013-10-31' },
+      { court_id: 'sci',       court_name: 'Supreme Court of India', start_date: '2016-05-13', tenure_start: '2016-05-13', tenure_end: null,          total_judgments: 890, authored: 380, presided: 510 },
+      { court_id: 'bombay-hc', court_name: 'Bombay High Court',      start_date: '2000-03-29', tenure_start: '2000-03-29', end_date: '2013-10-31', tenure_end: '2013-10-31', total_judgments: 355, authored: 132, presided: 223 },
     ],
     total_judgments: 1245, authored: 512, presided: 733,
     disposal_breakdown:   { Allowed: 580, Dismissed: 490, 'Partly Allowed': 175 },
@@ -440,7 +574,7 @@ const MOCK_JUDGES: Judge[] = [
     canonical_name: 'Justice Rajiv Shakdher',
     name_variants: ['Rajiv Shakdher', 'Justice Shakdher'],
     designation: 'Judge',
-    courts: [{ court_id: 'delhi-hc', court_name: 'Delhi High Court', start_date: '2008-04-11' }],
+    courts: [{ court_id: 'delhi-hc', court_name: 'Delhi High Court', start_date: '2008-04-11', tenure_start: '2008-04-11', tenure_end: null, total_judgments: 814, authored: 390, presided: 424 }],
     total_judgments: 814, authored: 390, presided: 424,
     disposal_breakdown:  { Allowed: 320, Dismissed: 380, 'Partly Allowed': 114 },
     case_type_breakdown: { 'Writ Petition (Civil)': 410, 'Company Petition': 204, 'Taxation Matter': 200 },
@@ -518,22 +652,46 @@ export const apiService = {
       await sleep(200);
       return [{ code: 'complex_1', name: 'Court Complex A' }, { code: 'complex_2', name: 'Court Complex B' }];
     }
-    const data = await request<{ code: string; name: string }[]>(
+    // Backend returns { state_code, district_code, complexes: [{code, name, est_code, flag}] }
+    const data = await request<{ state_code: string; district_code: string; complexes: { code: string; name: string }[] }>(
       `/v1/courts/states/${state}/districts/${district}/complexes`
     );
-    return data.map(c => ({ code: c.code, name: stripHtml(c.name) }));
+    return (data.complexes || []).map(c => ({ code: c.code, name: stripHtml(c.name) }));
+  },
+
+  async getCaseTypes(state: string, district: string, complex: string): Promise<{ code: string; name: string }[]> {
+    if (apiConfig.useMock) {
+      await sleep(200);
+      return [
+        { code: 'WP', name: 'Writ Petition' },
+        { code: 'CS', name: 'Civil Suit' },
+        { code: 'CRL', name: 'Criminal Case' },
+      ];
+    }
+    const data = await request<{ case_types: { code: string; case_type: string; name: string }[] }>(
+      `/v1/courts/states/${state}/districts/${district}/complexes/${encodeURIComponent(complex)}/case-types`
+    );
+    return (data.case_types || []).map(t => ({ code: t.code, name: t.name }));
   },
 
   // ── Cases ────────────────────────────────────────────────────────────────────
 
-  async searchCases(params: { cnr?: string; court?: string; party?: string; advocate?: string }): Promise<CaseInfo[]> {
+  async searchCases(params: {
+    cnr?: string; court?: string; party?: string; advocate?: string;
+    case_no?: string; case_type?: string; year?: number;
+    year_from?: number; year_to?: number;
+    fir_no?: string; police_station?: string;
+    filing_no?: string; filing_year?: number;
+  }): Promise<CaseInfo[]> {
     if (apiConfig.useMock) {
       await sleep(600);
       return MOCK_CASES.filter(c => {
-        if (params.cnr      && !c.cnr.toLowerCase().includes(params.cnr.toLowerCase())) return false;
-        if (params.court    && c.court.id !== params.court) return false;
-        if (params.party    && !c.petitioner.toLowerCase().includes(params.party.toLowerCase())   && !c.respondent.toLowerCase().includes(params.party.toLowerCase()))    return false;
-        if (params.advocate && !c.advocate_petitioner.toLowerCase().includes(params.advocate.toLowerCase()) && !c.advocate_respondent.toLowerCase().includes(params.advocate.toLowerCase())) return false;
+        if (params.cnr       && !c.cnr.toLowerCase().includes(params.cnr.toLowerCase())) return false;
+        if (params.court     && c.court.id !== params.court) return false;
+        if (params.party     && !c.petitioner.toLowerCase().includes(params.party.toLowerCase()) && !c.respondent.toLowerCase().includes(params.party.toLowerCase())) return false;
+        if (params.advocate  && !c.advocate_petitioner.toLowerCase().includes(params.advocate.toLowerCase()) && !c.advocate_respondent.toLowerCase().includes(params.advocate.toLowerCase())) return false;
+        if (params.case_no   && !c.case_number.toLowerCase().includes(params.case_no.toLowerCase())) return false;
+        if (params.case_type && !c.case_type.toLowerCase().includes(params.case_type.toLowerCase())) return false;
         return true;
       });
     }
@@ -576,18 +734,19 @@ export const apiService = {
         total_pages: Math.max(1, Math.ceil(filtered.length / pageSize)),
       };
     }
-    // Backend returns paginated: { items: Judgment[], total, page, page_size }
+    // Backend returns paginated: { items: Judgment[], total, page, page_size, total_pages }
     const query = buildQuery({ ...(params as Record<string, string | number | undefined>), page, page_size: pageSize });
-    const data = await request<{ items: Record<string, unknown>[]; total: number; page: number; page_size: number }>(
+    const data = await request<{ items: Record<string, unknown>[]; total: number; page: number; page_size: number; total_pages?: number }>(
       `/v1/judgments?${query}`
     );
     const ps = data.page_size || pageSize;
+    const total = data.total ?? data.items.length;
     return {
       items: data.items.map(normaliseJudgment),
-      total: data.total ?? data.items.length,
+      total,
       page: data.page ?? page,
       page_size: ps,
-      total_pages: Math.max(1, Math.ceil((data.total ?? data.items.length) / ps)),
+      total_pages: data.total_pages ?? Math.max(1, Math.ceil(total / ps)),
     };
   },
 
@@ -618,26 +777,36 @@ export const apiService = {
           court: MOCK_COURTS[1], listing_date: date,
         },
       ];
-      return { entries: mockEntries, pdf_url: null, bench_name: 'Delhi', total_cases: 2 };
+      return {
+        court_id: court, court_name: MOCK_COURTS.find(c => c.id === court)?.name ?? court,
+        listing_date: date, format: 'entries',
+        entries: mockEntries, pdf_url: null, bench_code: null, bench_name: 'Delhi', total_cases: 2,
+      };
     }
 
-    // Backend returns a summary object: { court, bench_code, bench_name, listing_date, pdf_url, total_cases }
-    // HC/SCI courts → pdf_url is populated; individual entries are served as a PDF document.
-    // District courts → structured entries (Phase 3+, may not be available yet).
+    // Backend returns the unified CauseListResponse shape regardless of court tier.
     const data = await request<{
-      court: Record<string, unknown>;
-      bench_name: string | null;
+      court_id: string;
+      court_name: string;
       listing_date: string;
+      format: 'pdf' | 'entries';
+      entries: CauseListEntry[];
       pdf_url: string | null;
+      bench_code: string | null;
+      bench_name: string | null;
       total_cases: number | null;
-      items?: CauseListEntry[];
     }>(`/v1/cause-lists/${court}/${date}`);
 
     return {
-      entries:     data.items ?? [],
+      court_id:    data.court_id,
+      court_name:  data.court_name,
+      listing_date: data.listing_date,
+      format:      data.format,
+      entries:     data.entries ?? [],
       pdf_url:     data.pdf_url ?? null,
-      bench_name:  data.bench_name,
-      total_cases: data.total_cases,
+      bench_code:  data.bench_code ?? null,
+      bench_name:  data.bench_name ?? null,
+      total_cases: data.total_cases ?? null,
     };
   },
 
@@ -672,23 +841,18 @@ export const apiService = {
     // Backend returns paginated: { items: Advocate[], total, page, page_size }
     // active_only=true is the backend default — retired advocates excluded from all listings.
     const query = buildQuery({ ...params, active_only: true, page, page_size: pageSize });
-    const data = await request<{ items: Advocate[]; total: number; page: number; page_size: number }>(
+    const data = await request<{ items: Advocate[]; total: number; page: number; page_size: number; total_pages?: number }>(
       `/v1/advocates?${query}`
     );
     const ps = data.page_size || pageSize;
-    const items = (data.items ?? []).map((a: Advocate) => ({
-      ...a,
-      courts: Array.isArray(a.courts) ? a.courts : [],
-      name_variants: Array.isArray(a.name_variants) ? a.name_variants : [],
-      specializations: a.specializations && typeof a.specializations === 'object' ? a.specializations : {},
-      states: a.states && typeof a.states === 'object' ? a.states : {},
-    }));
+    const items = (data.items ?? []).map(normaliseAdvocate);
+    const total = data.total ?? items.length;
     return {
       items,
-      total: data.total ?? items.length,
+      total,
       page: data.page ?? page,
       page_size: ps,
-      total_pages: Math.max(1, Math.ceil((data.total ?? items.length) / ps)),
+      total_pages: data.total_pages ?? Math.max(1, Math.ceil(total / ps)),
     };
   },
 
@@ -696,14 +860,7 @@ export const apiService = {
     if (apiConfig.useMock) { await sleep(400); return MOCK_ADVOCATES.find(a => a.id === id) ?? null; }
     const data = await request<Advocate>(`/v1/advocates/${id}`);
     if (!data) return null;
-    // Normalise fields the backend may omit or return as non-array
-    return {
-      ...data,
-      courts: Array.isArray(data.courts) ? data.courts : [],
-      name_variants: Array.isArray(data.name_variants) ? data.name_variants : [],
-      specializations: data.specializations && typeof data.specializations === 'object' ? data.specializations : {},
-      states: data.states && typeof data.states === 'object' ? data.states : {},
-    };
+    return normaliseAdvocate(data);
   },
 
   async getAdvocateCases(id: string): Promise<CaseInfo[]> {
@@ -765,22 +922,24 @@ export const apiService = {
       page,
       page_size: pageSize,
     });
-    const data = await request<{ items: Judge[]; total: number; page: number; page_size: number }>(
+    const data = await request<{ items: Judge[]; total: number; page: number; page_size: number; total_pages?: number }>(
       `/v1/judges?${query}`
     );
     const ps = data.page_size || pageSize;
+    const total = data.total ?? data.items.length;
     return {
-      items: data.items,
-      total: data.total ?? data.items.length,
+      items: data.items.map(normaliseJudge),
+      total,
       page: data.page ?? page,
       page_size: ps,
-      total_pages: Math.max(1, Math.ceil((data.total ?? data.items.length) / ps)),
+      total_pages: data.total_pages ?? Math.max(1, Math.ceil(total / ps)),
     };
   },
 
   async getJudgeById(id: string): Promise<Judge | null> {
     if (apiConfig.useMock) { await sleep(400); return MOCK_JUDGES.find(j => j.id === id) ?? null; }
-    return request<Judge>(`/v1/judges/${id}`);
+    const data = await request<Judge>(`/v1/judges/${id}`);
+    return data ? normaliseJudge(data) : null;
   },
 
   async getJudgeJudgments(id: string): Promise<Judgment[]> {
@@ -792,6 +951,50 @@ export const apiService = {
     }
     const data = await request<Judgment[] | { items: Judgment[] }>(`/v1/judges/${id}/judgments`);
     return Array.isArray(data) ? data : data.items;
+  },
+
+  // ── Calcutta High Court ───────────────────────────────────────────────────────
+
+  async searchCalcuttaOrders(params: {
+    case_type: string;
+    case_number: string;
+    year: string;
+    establishment?: string;
+  }): Promise<CalcuttaResult> {
+    if (apiConfig.useMock) {
+      await sleep(700);
+      return {
+        case: {
+          cnr: `CAL${params.year}${params.case_number.padStart(6, '0')}`,
+          case_number: `${params.case_type}/${params.case_number}/${params.year}`,
+          case_type: params.case_type,
+          registration_date: `${params.year}-01-10`,
+          petitioner: 'Sample Petitioner Pvt Ltd',
+          respondent: 'State of West Bengal',
+          advocate_petitioner: 'A. K. Banerjee',
+          advocate_respondent: 'D. Ghosh (Govt. Pleader)',
+          judges: ['Justice Harish Tandon', 'Justice Hiranmay Bhattacharyya'],
+          status: 'PENDING',
+          next_hearing_date: '2026-07-15',
+          court: { id: 'calcutta-hc', court_type: 'HIGH', name: 'Calcutta High Court', state_code: 'WB', portal_url: 'calcuttahighcourt.gov.in' },
+          orders: [],
+        },
+        orders: [
+          { order_date: `${params.year}-03-12`, order_type: 'Interim Order', judge: 'Justice Harish Tandon', pdf_url: '#', neutral_citation: null },
+          { order_date: `${params.year}-05-28`, order_type: 'Hearing', judge: 'Justice Harish Tandon', pdf_url: '#', neutral_citation: null },
+        ],
+        total: 2,
+      };
+    }
+    const query = buildQuery({ ...params, establishment: params.establishment ?? 'appellate' });
+    return request<CalcuttaResult>(`/v1/calcutta/orders?${query}`);
+  },
+
+  async downloadCalcuttaPdf(pdfUrl: string): Promise<void> {
+    // Proxy through the backend so CORS headers are added
+    const query = buildQuery({ pdf_url: pdfUrl });
+    const url = `${apiConfig.baseUrl}/v1/calcutta/pdf?${query}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
   },
 
   // ── Bulk jobs ─────────────────────────────────────────────────────────────────
