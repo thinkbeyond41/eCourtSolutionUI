@@ -8,7 +8,7 @@
 import React from 'react';
 import {
   X, Scale, Calendar, Eye, FileText, User, Award,
-  ChevronRight, MapPin, ExternalLink,
+  ChevronRight, MapPin, ExternalLink, Clock,
 } from 'lucide-react';
 import type { CaseInfo } from '../services/api';
 
@@ -153,40 +153,70 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
           <h4 style={{ fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)', marginBottom: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <Scale size={14} /> Parties &amp; Advocates
           </h4>
-          <div className="two-col-detail">
-            {/* Petitioner side */}
-            <div style={{ padding: '1rem', background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 'var(--radius-md)' }}>
-              <div style={{ fontSize: '0.68rem', color: 'var(--accent-primary)', textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.5rem' }}>Petitioner</div>
-              <div style={{ fontSize: '0.92rem', fontWeight: 700, marginBottom: '0.5rem' }}>{c.petitioner}</div>
-              {c.advocate_petitioner && (
-                <div>
-                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>Advocate</div>
-                  <EntityChip
-                    icon={<Award size={11} />}
-                    label={c.advocate_petitioner}
-                    color="var(--accent-secondary)"
-                    onClick={onOpenAdvocate ? () => onOpenAdvocate(c.advocate_petitioner) : undefined}
-                  />
-                </div>
-              )}
+
+          {/* Structured parties view — shown when backend returns parties[] */}
+          {c.parties && c.parties.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {(['petitioner', 'respondent', 'intervenor'] as const).map(ptype => {
+                const group = c.parties!.filter(p => p.party_type === ptype);
+                if (!group.length) return null;
+                const color = ptype === 'petitioner' ? 'var(--accent-primary)' : ptype === 'respondent' ? 'var(--info)' : 'var(--accent-secondary)';
+                const bg    = ptype === 'petitioner' ? 'rgba(99,102,241,0.05)' : ptype === 'respondent' ? 'rgba(6,182,212,0.05)' : 'rgba(139,92,246,0.05)';
+                const bdr   = ptype === 'petitioner' ? 'rgba(99,102,241,0.15)' : ptype === 'respondent' ? 'rgba(6,182,212,0.15)' : 'rgba(139,92,246,0.15)';
+                // Find the advocate for this side (fallback to raw string)
+                const advocateName = ptype === 'petitioner' ? c.advocate_petitioner : ptype === 'respondent' ? c.advocate_respondent : null;
+                return (
+                  <div key={ptype} style={{ padding: '0.875rem 1rem', background: bg, border: `1px solid ${bdr}`, borderRadius: 'var(--radius-md)' }}>
+                    <div style={{ fontSize: '0.68rem', color, textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.5rem' }}>{ptype}</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginBottom: advocateName ? '0.5rem' : 0 }}>
+                      {group.map((p, i) => (
+                        <span key={i} style={{ fontSize: '0.88rem', fontWeight: 700 }}>
+                          {p.name}{i < group.length - 1 ? <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> &amp; </span> : ''}
+                        </span>
+                      ))}
+                    </div>
+                    {advocateName && (
+                      <div>
+                        <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>Advocate</div>
+                        <EntityChip
+                          icon={<Award size={11} />}
+                          label={advocateName}
+                          color={color}
+                          onClick={onOpenAdvocate ? () => onOpenAdvocate(advocateName) : undefined}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-            {/* Respondent side */}
-            <div style={{ padding: '1rem', background: 'rgba(6,182,212,0.05)', border: '1px solid rgba(6,182,212,0.15)', borderRadius: 'var(--radius-md)' }}>
-              <div style={{ fontSize: '0.68rem', color: 'var(--info)', textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.5rem' }}>Respondent</div>
-              <div style={{ fontSize: '0.92rem', fontWeight: 700, marginBottom: '0.5rem' }}>{c.respondent}</div>
-              {c.advocate_respondent && (
-                <div>
-                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>Advocate</div>
-                  <EntityChip
-                    icon={<Award size={11} />}
-                    label={c.advocate_respondent}
-                    color="var(--info)"
-                    onClick={onOpenAdvocate ? () => onOpenAdvocate(c.advocate_respondent) : undefined}
-                  />
-                </div>
-              )}
+          ) : (
+            /* Fallback: raw petitioner/respondent strings (case fetched before persistence) */
+            <div className="two-col-detail">
+              <div style={{ padding: '1rem', background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 'var(--radius-md)' }}>
+                <div style={{ fontSize: '0.68rem', color: 'var(--accent-primary)', textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.5rem' }}>Petitioner</div>
+                <div style={{ fontSize: '0.92rem', fontWeight: 700, marginBottom: '0.5rem' }}>{c.petitioner}</div>
+                {c.advocate_petitioner && (
+                  <div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>Advocate</div>
+                    <EntityChip icon={<Award size={11} />} label={c.advocate_petitioner} color="var(--accent-secondary)"
+                      onClick={onOpenAdvocate ? () => onOpenAdvocate(c.advocate_petitioner) : undefined} />
+                  </div>
+                )}
+              </div>
+              <div style={{ padding: '1rem', background: 'rgba(6,182,212,0.05)', border: '1px solid rgba(6,182,212,0.15)', borderRadius: 'var(--radius-md)' }}>
+                <div style={{ fontSize: '0.68rem', color: 'var(--info)', textTransform: 'uppercase', fontWeight: 700, marginBottom: '0.5rem' }}>Respondent</div>
+                <div style={{ fontSize: '0.92rem', fontWeight: 700, marginBottom: '0.5rem' }}>{c.respondent}</div>
+                {c.advocate_respondent && (
+                  <div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>Advocate</div>
+                    <EntityChip icon={<Award size={11} />} label={c.advocate_respondent} color="var(--info)"
+                      onClick={onOpenAdvocate ? () => onOpenAdvocate(c.advocate_respondent) : undefined} />
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* ── Court & Bench ── */}
@@ -209,6 +239,46 @@ export const CaseDetailModal: React.FC<CaseDetailModalProps> = ({
             </div>
           )}
         </div>
+
+        {/* ── Hearing History ── (shown only when hearings[] is present) */}
+        {c.hearings && c.hearings.length > 0 && (
+          <div>
+            <h4 style={{ fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)', marginBottom: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <Clock size={14} /> Hearing History
+            </h4>
+            <div className="timeline">
+              {c.hearings.map((h, idx) => {
+                const isFuture = h.next_date === null && idx === c.hearings!.length - 1 && !c.orders?.some(o => o.order_date >= h.hearing_date);
+                return (
+                  <div key={idx} className="timeline-item">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      <div>
+                        <div style={{ fontSize: '0.9rem', fontWeight: 700 }}>{h.purpose ?? 'Hearing'}</div>
+                        {h.judge && (
+                          <div style={{ marginTop: '0.3rem' }}>
+                            <EntityChip icon={<User size={10} />} label={h.judge} color="var(--accent-primary)"
+                              onClick={onOpenJudge ? () => onOpenJudge(h.judge!) : undefined} />
+                          </div>
+                        )}
+                        {h.next_date && (
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                            Next: <span style={{ color: 'var(--warning)', fontWeight: 600 }}>{h.next_date}</span>
+                          </div>
+                        )}
+                      </div>
+                      <span style={{
+                        fontSize: '0.82rem', fontWeight: 600, fontFamily: 'var(--font-mono)',
+                        color: isFuture ? 'var(--warning)' : 'var(--text-secondary)',
+                      }}>
+                        {h.hearing_date}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* ── Case History / Orders Timeline ── */}
         <div>
