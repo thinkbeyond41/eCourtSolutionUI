@@ -1,0 +1,32 @@
+{
+  // Use the workspace TypeScript version, not VS Code's bundled one
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+
+  // Auto-fix ESLint errors on save (formatting + import order)
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "eslint.validate": ["typescript", "typescriptreact"],
+
+  // Formatting
+  "editor.formatOnSave": false,    // Let ESLint handle formatting, not the editor
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+
+  // File associations
+  "files.associations": {
+    "*.css": "css"
+  },
+
+  // Exclude noisy folders from search and file watcher
+  "files.exclude": {
+    "node_modules": true,
+    "dist": true
+  },
+  "search.exclude": {
+    "node_modules": true,
+    "dist": true,
+    "package-lock.json": true
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "recommendations": [
+    // TypeScript & JavaScript
+    "ms-vscode.vscode-typescript-next",
+
+    // ESLint — shows lint errors inline as you type
+    "dbaeumer.vscode-eslint",
+
+    // React developer tools (browser extension — install separately)
+    // Reminder listed here for new team members
+    // https://react.dev/learn/react-developer-tools
+
+    // Git
+    "eamodio.gitlens",
+
+    // Editor quality
+    "editorconfig.editorconfig",
+    "streetsidesoftware.code-spell-checker"
+  ]
+}
